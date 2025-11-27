@@ -1,0 +1,23 @@
+# Illuminata sensor processor
+
+This project is a culmination of various microcontroller firmwares intended to provide expressive lighting for the CYBORG character I have been developing over the past few years
+
+# Intended use
+
+The not-for-profit license assigned to this repository intends to bind my work to a free to use space. Free, as in "libre," for anyone to use as a vehicle for learning about concepts in low level programming, use of body-worn sensors, code techniques and developing simple tools that help express oneself with movement and lights
+
+# Background
+
+Some of the ideas I have developed from this concept spring from attempts to make a prosthetic that becomes as good or better than the fleshy one I lost on July 4th 2006. A project of passion, this serves as a catharsis and making light of a series of unfortunate events that resulted in the loss of most of my fingers.
+
+I hope that the groundwork laid here will go on to help people. Some of the use cases I forsee this benefitting are:
+
+- entertainment and showmanship, such as the CYBORG character I don when I want to spread positivity in a dark world
+- tools for low performing individuals with autism, where sensory overload requires much less harsh ways of interacting with one's own environment
+- room lighting, specifically when it comes to simple interactive lighting which is less boring than RGB bulbs
+
+# Technical details
+
+At its core, the outputs of this system target commodity RGBW lights. The processing translates to one or more collections of lights, from sensors such as orientation, pressure, sound, etc.
+
+As it stands alone, the system has one or more states that can be switched between based on a progression of movements. Each function representing a way of processing inputs is held in a function with internal state, and will potentially be dynamically iterated over using machine learning, to better express oneself with a physical representation of abstract concepts and emotions.
