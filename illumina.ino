@@ -1,26 +1,6 @@
 // A copy of this firmware's license is included in the LICENSE file and is intended to provide for use of this work in not-for-profit applications. Copyleft 2025 by Derek Yerger (CYBORG)
 
-#include <Wire.h>
-#include <Adafruit_NeoPixel.h>
-#include <Adafruit_BNO055.h>
-
-#include <EEPROM.h>
-#include <avr/sleep.h>
-#include <avr/power.h>
-
-#include "BluefruitConfig.h"
-#include "Adafruit_BLE.h"
-#include "Adafruit_BluefruitLE_SPI.h"
-#include "Adafruit_BluefruitLE_UART.h"
-#if SOFTWARE_SERIAL_AVAILABLE
-  #include <SoftwareSerial.h>
-#endif
-#define FACTORYRESET_ENABLE         0
-#define MINIMUM_FIRMWARE_VERSION    "0.6.6"
-#define MODE_LED_BEHAVIOUR          "MODE"
-
-#define NEOPIXEL_PIN A5
-#define NUM_PIXELS 16
+#include "illumina.h"
 
 Adafruit_BluefruitLE_SPI ble(BLUEFRUIT_SPI_CS, BLUEFRUIT_SPI_IRQ, BLUEFRUIT_SPI_RST);
 
@@ -29,43 +9,28 @@ Adafruit_BNO055 bno = Adafruit_BNO055(55);
 Adafruit_NeoPixel ring(NUM_PIXELS, NEOPIXEL_PIN, NEO_GRBW + NEO_KHZ800);
 
 unsigned long ultimer, ultimer2;
-
-byte curmode; /* mode 0: off until */ const int oriNadir = -80; /* for time
-interval */ const int nadirTime = 500; /* then gyro lift to horizontal
-defined by */ const int raiseTime = 250; /* and */ const int oriHoriz = -10;
-
-/* Then mode 1 is gravity ball mode, note the */ float ball_angle = 0.0; /* ball
-position in degrees, as well as the */ float ball_velocity = 0.0; /* Modify these
-using a */ float damping = 0.95; /* factor to prevent infinite motion, and
-contribute to the change according to a */ float accel_weight = 0.2; /* scaling
-factor for acceleration influence. Side sway makes the white pixel go side to
-side and turns off/mode 0 if going to nadir. If linear accel exceeds */ const
-float ballToFlashlightAccel = 15.0; /* then go round the ring, lighting up the
-whole thing and onto mode 3 with fading between solid white and flashing */
-const int ballSettleTime = 500;
-
+byte curmode;
+float modeBearing;
 long hue = 0;
 int speedMix = 0; /* slowing forward movement blends towards solid white,
                       speeding up toward flashy */
-float accelMin = 4.0;
-byte accelWtInc = 10;
-float gyroMin = 3.0;
-byte gyroWtInc = 10;
-byte accelWtDec = 3;
-byte ballTrDelay = 25;
+float ball_angle = 0.0;
+float ball_velocity = 0.0;
+
+#define MAGIC 42069
+illumina_ctrl_t curSettings = defSettings;
 
 byte colorScheme = 0;
-int csOri1 = -65;
+int csOri1 = -60;
 int csOri2 = 10;
 
-byte oriMix = 0; /* lights off at nadir fade to on
-at */ const int oriIlluminated = -10;
+byte oriMix = 0;
 byte blinky;
 float accelAvg, accelDamping = 0.999;
 
 int delayCtr;
-byte delayDecay = 1;
-int delayOri = 40;
+byte delayDecay = 2;
+int delayOri = 60;
 byte delayMax = 1;
 
 byte textPtr;
@@ -107,7 +72,7 @@ void setup() {
     ble.sendCommandCheckOK("AT+GAPDEVNAME=cyborg");
     ble.sendCommandCheckOK("AT+HWMODELED=DISABLE");
   }
-  bleConnect();
+  bleDisconnect();
   ble.setMode(BLUEFRUIT_MODE_DATA);
 
   int eeAddress = 0;
@@ -119,10 +84,23 @@ void setup() {
   sensor_t sensor;
 
   bno.getSensor(&sensor);
+  eeAddress += sizeof(long);
   if (bnoID == sensor.sensor_id) {
-    eeAddress += sizeof(long);
     EEPROM.get(eeAddress, calibrationData);
     bno.setSensorOffsets(calibrationData);
+  }
+  eeAddress += sizeof(adafruit_bno055_offsets_t);
+
+  uint16_t mag;
+  EEPROM.get(eeAddress, mag);
+  if (mag == MAGIC) {
+    eeAddress += sizeof(uint16_t);
+    EEPROM.get(eeAddress, curSettings);
+  } else {
+    mag = MAGIC;
+    EEPROM.put(eeAddress, mag);
+    eeAddress += sizeof(uint16_t);
+    EEPROM.put(eeAddress, curSettings);
   }
 
   ring.clear();
@@ -140,32 +118,41 @@ void loop() {
 
   // if ((orientationData.orientation.z < (horiz + horizRg)) && (orientationData.orientation.z > (horiz - horizRg)) && (
   int bv = orientationData.orientation.z;
-  bv = constrain(bv, oriNadir, oriIlluminated);
-  bv = map(bv, oriNadir, oriIlluminated, 0, 255);
+  bv = constrain(bv, curSettings.oriNadir, curSettings.oriIlluminated);
+  bv = map(bv, curSettings.oriNadir, curSettings.oriIlluminated, 0, 255);
   ring.setBrightness(bv);
   ring.show();
 
   if (curmode == 0) {
-    if (orientationData.orientation.z >= oriNadir) ultimer = millis();
-    else if ((millis() - ultimer) > nadirTime) ultimer2 = millis();
-    if ((orientationData.orientation.z > oriHoriz) && ((millis() - ultimer2) < raiseTime)) curmode++;
+    if (orientationData.orientation.z >= curSettings.oriNadir) ultimer = millis();
+    else if ((millis() - ultimer) > curSettings.nadirTime) {
+      ultimer2 = millis();
+      modeBearing = orientationData.orientation.x;
+    }
+    if ((orientationData.orientation.z > curSettings.oriHoriz) && ((millis() - ultimer2) < curSettings.raiseTime)) {
+      // Select next mode based on bearing
+      if ((orientationData.orientation.x - modeBearing) < curSettings.bearingBoundL)
+        curmode = 5;
+      else if ((orientationData.orientation.x - modeBearing) > curSettings.bearingBoundR)
+        curmode = 6;
+      else curmode++;
+    }
     ring.clear();
     ring.show();
   }
   if (curmode == 1) {
     // Compute acceleration influence (Y as forward/backward, X as lateral)
     imu::Vector<3> accel = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
-    float accel_x = accel.x() * accel_weight;
-    float accel_y = accel.z() * accel_weight;
+    float accel_x = accel.x() * curSettings.m1_accel_weight;
+    float accel_y = accel.z() * curSettings.m1_accel_weight;
 
     // Gravity naturally pulls the ball downward (towards 180 degrees)
-    float gravity_effect = 0.001; // Adjust as needed
-    if (ball_angle < 180) ball_velocity += gravity_effect;
-    else ball_velocity -= gravity_effect;
+    if (ball_angle < 180) ball_velocity += curSettings.m1_gravity_effect;
+    else ball_velocity -= curSettings.m1_gravity_effect;
 
     // Update velocity based on acceleration
     ball_velocity += accel_x * cos(ball_angle * DEG_TO_RAD) + accel_y * sin(ball_angle * DEG_TO_RAD);
-    ball_velocity *= damping;
+    ball_velocity *= curSettings.m1_damping;
 
     // Update ball position
     ball_angle += ball_velocity;
@@ -175,16 +162,16 @@ void loop() {
     // Map angle to NeoPixel ring (16 LEDs, 360 degrees)
     int led_index = round((ball_angle / 360.0) * NUM_PIXELS + NUM_PIXELS/2) % NUM_PIXELS;
 
-    if (abs(ball_velocity) < ballToFlashlightAccel) ring.clear();
-    else if ((millis() - ultimer) > ballSettleTime) {
+    if (abs(ball_velocity) < curSettings.m1_ballToFlashlightAccel) ring.clear();
+    else if ((millis() - ultimer) > curSettings.m1_ballSettleTime) {
       for (int i=0; i<NUM_PIXELS; i++) {
         ball_angle += ball_velocity;
         if (ball_angle < 0) ball_angle += 360;
         if (ball_angle >= 360) ball_angle -= 360;
         led_index = round((ball_angle / 360.0) * NUM_PIXELS + NUM_PIXELS/2) % NUM_PIXELS;
-        ring.setPixelColor((led_index + 7) % NUM_PIXELS, ring.Color(0, 0, 0, 255));
+        ring.setPixelColor((led_index + curSettings.m1_ringOffset) % NUM_PIXELS, ring.Color(0, 0, 0, 255));
         ring.show();
-        delay(ballTrDelay);
+        delay(curSettings.m2_ballTrDelay);
       }
       curmode++;
     }
@@ -193,7 +180,7 @@ void loop() {
       hue %= 5*65536;
     }
     ring.setPixelColor(NUM_PIXELS - led_index - 1, ring.ColorHSV(hue));*/
-    ring.setPixelColor((led_index + 7) % NUM_PIXELS, ring.Color(0, 0, 0, 255));
+    ring.setPixelColor((led_index + curSettings.m1_ringOffset) % NUM_PIXELS, ring.Color(0, 0, 0, 255));
     ring.show();
     delay(5);
   }
@@ -206,9 +193,9 @@ void loop() {
       delay(delayCtr);
       speedMix = 255;
     }
-    if (accelSum > accelMin) speedMix += accelWtInc;
+    if (accelSum > curSettings.m2_accelMin) speedMix += curSettings.m2_accelWtInc;
     else speedMix--;
-    if ((abs(angVelocityData.gyro.x) > gyroMin) || (abs(angVelocityData.gyro.y) > gyroMin)) speedMix += gyroWtInc;
+    if ((abs(angVelocityData.gyro.x) > curSettings.m2_gyroMin) || (abs(angVelocityData.gyro.y) > curSettings.m2_gyroMin)) speedMix += curSettings.m2_gyroWtInc;
     speedMix = constrain(speedMix - 1, 0, 255);
 
     if (orientationData.orientation.z < csOri1) {
@@ -223,8 +210,8 @@ void loop() {
       speedMix = 255;
       //Serial.println(textPtr);
     } else {
-      if (orientationData.orientation.z > csOri2) colorScheme = 0;
-      else colorScheme = 1;
+      if (orientationData.orientation.z > csOri2) colorScheme = 1;
+      else colorScheme = 0;
     }
 
     byte r = 0, g = 0, b = 0, w = 0, bb = speedMix;
@@ -260,7 +247,7 @@ void loop() {
       }
       if (colorScheme == 3) {
         if (text[textPtr - 1] & (blinky >> 1)) b = 255;
-        else r = 255;
+        //else r = 255;
         /* if ((blinky % 2) == 1) {
           r = b;
           b = 0;
@@ -284,14 +271,37 @@ void loop() {
     
     ring.fill(ring.Color(r, g, b, w));
     ring.show();
-    if (orientationData.orientation.z >= oriNadir) ultimer = millis();
-    else if ((millis() - ultimer) > nadirTime) curmode = 0;
+    if (orientationData.orientation.z >= curSettings.oriNadir) ultimer = millis();
+    else if ((millis() - ultimer) > curSettings.nadirTime) curmode = 0;
   } else if (curmode == 5) {
     sensors_event_t orientationData;
     bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
     hue = (long) orientationData.orientation.z << 9;
     ring.fill(ring.ColorHSV(hue));
     ring.show();
+    if (orientationData.orientation.z >= curSettings.oriNadir) ultimer = millis();
+    else if ((millis() - ultimer) > curSettings.nadirTime) curmode = 0;
+  } else if (curmode == 6) {
+    byte r = 0, g = 0, b = 0, w = 0;
+    if (orientationData.orientation.z > delayOri)
+      w = map(orientationData.orientation.z, delayOri, 90, 0, 255); 
+    
+    if (orientationData.orientation.z > -35) blinky = (blinky + 1) % 6; // random color of RGBCMY
+
+    if (blinky % 3 == 0) r = 255;
+    else if (blinky % 3 == 1) g = 255;
+    else if (blinky % 3 == 2) b = 255;
+    switch (blinky) {
+      case 3: g = 255; break;
+      case 4: b = 255; break;
+      case 5: r = 255;
+    }
+    
+    ring.fill(ring.Color(r, g, b, w));
+    ring.show();
+    if (orientationData.orientation.z >= curSettings.oriNadir) ultimer = millis();
+    else if ((millis() - ultimer) > curSettings.nadirTime) curmode = 0;
+    delay(5);
   }
   handleAdjust();
 }
@@ -306,101 +316,6 @@ void handleAdjust() {
       if (val == '5') {
         curmode = 5;
         ble.println("current mode 5");
-      }
-      if (val == 'D') {
-        accelWtInc += 1;
-        ble.print("accelWtInc = ");
-        ble.println(accelWtInc);
-      }
-      if (val == 'g') {
-        gyroWtInc -= 1;
-        ble.print("gyroWtInc = ");
-        ble.println(gyroWtInc);
-      }
-      if (val == 'G') {
-        gyroWtInc += 1;
-        ble.print("gyroWtInc = ");
-        ble.println(gyroWtInc);
-      }
-      if (val == 'f') {
-        accelWtDec -= 1;
-        ble.print("accelWtDec = ");
-        ble.println(accelWtDec);
-      }
-      if (val == 'F') {
-        accelWtDec += 1;
-        ble.print("accelWtDec = ");
-        ble.println(accelWtDec);
-      }
-      if (val == 'd') {
-        accelWtInc -= 1;
-        ble.print("accelWtInc = ");
-        ble.println(accelWtInc);
-      }
-      if (val == 'D') {
-        accelWtInc += 1;
-        ble.print("accelWtInc = ");
-        ble.println(accelWtInc);
-      }
-      if (val == 'a') {
-        gyroMin -= 0.5;
-        ble.print("gyroMin = ");
-        ble.println(gyroMin);
-      }
-      if (val == 'A') {
-        gyroMin += 0.5;
-        ble.print("gyroMin = ");
-        ble.println(gyroMin);
-      }
-      if (val == 's') {
-        accelMin -= 0.5;
-        ble.print("accelMin = ");
-        ble.println(accelMin);
-      }
-      if (val == 'S') {
-        accelMin += 0.5;
-        ble.print("accelMin = ");
-        ble.println(accelMin);
-      }
-      if (val == 'q') {
-        delayOri -= 1;
-        ble.print("delayOri = ");
-        ble.println(delayOri);
-      }
-      if (val == 'Q') {
-        delayOri += 1;
-        ble.print("delayOri = ");
-        ble.println(delayOri);
-      }
-      if (val == 'e') {
-        csOri2 -= 1;
-        ble.print("csOri2 = ");
-        ble.println(csOri2);
-      }
-      if (val == 'E') {
-        csOri2 += 1;
-        ble.print("csOri2 = ");
-        ble.println(csOri2);
-      }
-      if (val == 'w') {
-        csOri1 -= 1;
-        ble.print("csOri1 = ");
-        ble.println(csOri1);
-      }
-      if (val == 'W') {
-        csOri1 += 1;
-        ble.print("csOri1 = ");
-        ble.println(csOri1);
-      }
-      if (val == 'z') {
-        delayDecay -= 1;
-        ble.print("delayDecay = ");
-        ble.println(delayDecay);
-      }
-      if (val == 'Z') {
-        delayDecay += 1;
-        ble.print("delayDecay = ");
-        ble.println(delayDecay);
       }
     }
 }
