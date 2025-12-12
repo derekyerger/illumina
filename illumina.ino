@@ -6,6 +6,10 @@ Adafruit_BluefruitLE_SPI ble(BLUEFRUIT_SPI_CS, BLUEFRUIT_SPI_IRQ, BLUEFRUIT_SPI_
 
 Adafruit_BNO055 bno = Adafruit_BNO055(55);
 
+/** Lighting-specific settings **/
+#define NEOPIXEL_PIN A5
+#define NUM_PIXELS 16
+
 Adafruit_NeoPixel ring(NUM_PIXELS, NEOPIXEL_PIN, NEO_GRBW + NEO_KHZ800);
 
 unsigned long ultimer, ultimer2;
@@ -17,7 +21,7 @@ int speedMix = 0; /* slowing forward movement blends towards solid white,
 float ball_angle = 0.0;
 float ball_velocity = 0.0;
 
-#define MAGIC 42069
+#define MAGIC 42058
 illumina_ctrl_t curSettings = defSettings;
 
 byte colorScheme = 0;
@@ -72,7 +76,7 @@ void setup() {
     ble.sendCommandCheckOK("AT+GAPDEVNAME=cyborg");
     ble.sendCommandCheckOK("AT+HWMODELED=DISABLE");
   }
-  bleDisconnect();
+  bleConnect();
   ble.setMode(BLUEFRUIT_MODE_DATA);
 
   int eeAddress = 0;
@@ -87,7 +91,7 @@ void setup() {
   eeAddress += sizeof(long);
   if (bnoID == sensor.sensor_id) {
     EEPROM.get(eeAddress, calibrationData);
-    bno.setSensorOffsets(calibrationData);
+    //bno.setSensorOffsets(calibrationData);
   }
   eeAddress += sizeof(adafruit_bno055_offsets_t);
 
@@ -105,6 +109,7 @@ void setup() {
 
   ring.clear();
   ring.show();
+  curmode = 0;
 }
 
 void loop() {
@@ -124,16 +129,31 @@ void loop() {
   ring.show();
 
   if (curmode == 0) {
-    if (orientationData.orientation.z >= curSettings.oriNadir) ultimer = millis();
-    else if ((millis() - ultimer) > curSettings.nadirTime) {
+    if (orientationData.orientation.z < curSettings.oriNadir) {
+      ring.setBrightness(50);
+      ring.fill(ring.Color(64,0,255));
+      ring.show();
+    } else if ((millis() - ultimer2) < curSettings.raiseTime) {
+      ring.setBrightness(50);
+      ring.fill(ring.Color(255,84,0));
+      ring.show();
+    }
+    if (orientationData.orientation.z >= curSettings.oriNadir) {
+      ultimer = millis();
+    } else if ((millis() - ultimer) > curSettings.nadirTime) {
       ultimer2 = millis();
       modeBearing = orientationData.orientation.x;
     }
     if ((orientationData.orientation.z > curSettings.oriHoriz) && ((millis() - ultimer2) < curSettings.raiseTime)) {
       // Select next mode based on bearing
-      if ((orientationData.orientation.x - modeBearing) < curSettings.bearingBoundL)
+      delay(100);
+      bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
+      int mb = orientationData.orientation.x - modeBearing;
+      if (mb > 360) mb -= 360;
+      if (mb < -360) mb += 360;
+      if (mb < curSettings.bearingBoundL)
         curmode = 5;
-      else if ((orientationData.orientation.x - modeBearing) > curSettings.bearingBoundR)
+      else if (mb > curSettings.bearingBoundR)
         curmode = 6;
       else curmode++;
     }
@@ -200,7 +220,7 @@ void loop() {
 
     if (orientationData.orientation.z < csOri1) {
       colorScheme = 4;
-      textPtr = 1;
+      //textPtr = 1;
       delay(delayMax);
     } else if (colorScheme == 4) {
       colorScheme = 3;
@@ -286,22 +306,30 @@ void loop() {
     if (orientationData.orientation.z > delayOri)
       w = map(orientationData.orientation.z, delayOri, 90, 0, 255); 
     
-    if (orientationData.orientation.z > -35) blinky = (blinky + 1) % 6; // random color of RGBCMY
+    if (orientationData.orientation.z > csOri2) {
+      blinky = (blinky + 1) % 6; // random color of RGBCMY
+      delay(map(orientationData.orientation.z, csOri2, 90, 5, 100));
+    }
+
+    if (orientationData.orientation.z > 80) curmode++;
 
     if (blinky % 3 == 0) r = 255;
     else if (blinky % 3 == 1) g = 255;
     else if (blinky % 3 == 2) b = 255;
     switch (blinky) {
-      case 3: g = 255; break;
+      case 3: g = 84; break;
       case 4: b = 255; break;
-      case 5: r = 255;
+      case 5: r = 255; b = 96;
     }
     
     ring.fill(ring.Color(r, g, b, w));
     ring.show();
     if (orientationData.orientation.z >= curSettings.oriNadir) ultimer = millis();
     else if ((millis() - ultimer) > curSettings.nadirTime) curmode = 0;
-    delay(5);
+  } else if (curmode == 7) {
+    ring.setBrightness(50);
+    ring.fill(ring.Color(64,0,255));
+    ring.show();
   }
   handleAdjust();
 }

@@ -17,10 +17,6 @@
 #define MINIMUM_FIRMWARE_VERSION    "0.6.6"
 #define MODE_LED_BEHAVIOUR          "MODE"
 
-/** Lighting-specific settings **/
-#define NEOPIXEL_PIN A5
-#define NUM_PIXELS 16
-
 /** A structure to represent tunable settings associated with operating modes */
 typedef struct {
   int16_t oriNadir; // Pitch for pointed at ground
@@ -47,6 +43,6 @@ typedef struct {
   uint8_t m2_ballTrDelay;
 } illumina_ctrl_t;
 
-const illumina_ctrl_t defSettings = {-75, 500, 250, -10, -30, 0, -10, 
+const illumina_ctrl_t defSettings = {-75, 500, 250, -10, -30, 0, 65, 
   0.001, 0.95, 0.2, 15, 500, 7,
   4.0, 10, 3.0, 10, 25 };
